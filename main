@@ -1,0 +1,204 @@
+import pandas as pd
+import kagglehub
+import os
+import duckdb as dd 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+path = kagglehub.dataset_download("camussonif/argentinian-football-results-20152022")
+
+print(os.listdir(path))
+
+df = pd.read_csv(os.path.join(path, "afa_2015_2022_spa.csv"))
+
+#%% LIMPIEZA DE DATOS 
+
+consulta1 = """ SELECT DISTINCT torneo
+                FROM df """
+                
+torneo = dd.query(consulta1).df()
+
+torneo = torneo.reset_index()
+torneo = torneo.rename(columns={'index': 'id_torneo'})
+
+torneo['id_torneo'] = torneo['id_torneo'] + 1
+
+consulta2 = """ SELECT DISTINCT equipo_local AS equipo
+                FROM df
+                ORDER BY equipo ASC"""
+                
+equipo = dd.query(consulta2).df()
+
+equipo = equipo.reset_index()
+equipo = equipo.rename(columns={'index': 'id_equipo'})
+
+equipo['id_equipo'] = equipo['id_equipo'] + 1
+
+
+consulta3 = """ SELECT fecha, partido, equipo_local, equipo_visitante, resultado, 
+                apuesta_local, apuesta_visitante, apuesta_empate
+                FROM df 
+                """
+
+partido = dd.query(consulta3).df()
+
+
+promedio_apuestasLocal = partido['apuesta_local'].mean()
+promedio_apuestaVisitante = partido['apuesta_visitante'].mean()
+promedio_apuestaEmpate = partido['apuesta_empate'].mean()
+
+##ACA CLARAMENTE SE PEUDE OBSERVAR QUE EL PROMEDIO DE APUESTA AL VISITANTE ES MUCHO MAYOR 
+##(OSEA BASICAMENTE EL ESPERABLE ES QUE LE VAYA PEOR AL VISITANTE QUE AL LOCAL)
+
+locales = df[['equipo_local', 'resultado']].copy()
+visitantes = df[['equipo_visitante', 'resultado']].copy()
+
+def calcular_puntos_local(res):
+    if res == 'L': return 3
+    if res == 'E': return 1
+    return 0
+
+def calcular_puntos_visita(res):
+    if res == 'V': return 3
+    if res == 'E': return 1
+    return 0
+
+locales['puntos'] = locales['resultado'].apply(calcular_puntos_local)
+visitantes['puntos'] = visitantes['resultado'].apply(calcular_puntos_visita)
+
+locales = locales.rename(columns={'equipo_local': 'equipo'})
+visitantes = visitantes.rename(columns={'equipo_visitante': 'equipo'})
+
+todas_las_puntuaciones = pd.concat([locales[['equipo', 'puntos']], visitantes[['equipo', 'puntos']]])
+
+tabla_posiciones = todas_las_puntuaciones.groupby('equipo')['puntos'].sum().reset_index()
+
+tabla_posiciones = tabla_posiciones.sort_values(by='puntos', ascending=False)
+
+tabla_posiciones['posicion'] = range(1, len(tabla_posiciones) + 1)
+
+tabla_posiciones = tabla_posiciones[['posicion', 'equipo', 'puntos']]
+
+##AHORA TENGO LA TABLA DE POSICIONES Y NECESITO VER QUE TANTO INFLUYE LA LOCALIA Y DE VISITANTE
+
+puntosVisitantesProm = ((visitantes['puntos'].sum()) / (len(visitantes)*3)) * 100
+puntosLocalProm = ((locales['puntos'].sum()) / (len(locales)* 3)) * 100
+
+### Los locales consiguen un 53% de eficacia de puntos (nivel alto para la cantidad de 
+## partidos y además la cantidad distribución de clubes
+## Los visitantes consiguen un 36% de eficacia en puntos, lo cual es bajo 
+
+#%% 
+
+df['prob_local'] = 1 / df['apuesta_local']
+df['prob_visitante'] = 1 / df['apuesta_visitante']
+df['prob_empate'] = 1 / df['apuesta_empate']
+
+
+condiciones = [
+    (df['prob_local'] > df['prob_visitante']) & (df['prob_local'] > df['prob_empate']),
+    (df['prob_visitante'] > df['prob_local']) & (df['prob_visitante'] > df['prob_empate']),
+    (df['prob_empate'] > df['prob_local']) & (df['prob_empate'] > df['prob_visitante'])
+]
+
+columnas_apuestas = ['apuesta_local', 'apuesta_visitante', 'apuesta_empate']
+
+df['favorito_cuota'] = df[columnas_apuestas].idxmin(axis=1)
+
+mapeo = {
+    'apuesta_local': 'L',
+    'apuesta_visitante': 'V',
+    'apuesta_empate': 'E'
+}
+
+df['prediccion_apuesta'] = df['favorito_cuota'].map(mapeo)
+
+
+df['acierto_apuesta'] = df['prediccion_apuesta'] == df['resultado']
+
+porcentaje_acierto = df['acierto_apuesta'].mean() * 100
+
+print(f"Las apuestas acertaron el resultado final el {porcentaje_acierto:.2f}% de las veces.")
+
+#%% GRAFICO 
+
+##LOS MAS PREDESCIBLES
+aciertos_locales = df[['equipo_local', 'acierto_apuesta']].rename(columns={'equipo_local': 'equipo'})
+aciertos_visitantes = df[['equipo_visitante', 'acierto_apuesta']].rename(columns={'equipo_visitante': 'equipo'})
+
+todos_los_aciertos = pd.concat([aciertos_locales, aciertos_visitantes])
+
+acierto_por_equipo = todos_los_aciertos.groupby('equipo')['acierto_apuesta'].mean() * 100
+acierto_por_equipo = acierto_por_equipo.reset_index().sort_values(by='acierto_apuesta', ascending=False)
+
+plt.figure(figsize=(12, 8))
+sns.barplot(data=acierto_por_equipo.head(20), x='acierto_apuesta', y='equipo', palette='viridis')
+
+plt.title('Top 20 Equipos más "Predecibles" según las Apuestas')
+plt.xlabel('% de Acierto de la Casa de Apuestas')
+plt.ylabel('Equipo')
+plt.grid(axis='x', linestyle='--', alpha=0.7)
+plt.show()
+
+##GRAFICO DE LOS MENOS PREDESCIBLES
+acierto_por_equipo = todos_los_aciertos.groupby('equipo')['acierto_apuesta'].mean() * 100
+acierto_por_equipo = acierto_por_equipo.reset_index()
+
+
+predecibles = acierto_por_equipo.sort_values(by='acierto_apuesta', ascending=False)
+
+impredecibles = acierto_por_equipo.sort_values(by='acierto_apuesta', ascending=True)
+
+plt.figure(figsize=(12, 8))
+sns.barplot(data=impredecibles.head(20), x='acierto_apuesta', y='equipo', palette='Reds_r')
+
+plt.title('Top 20 Equipos MENOS Predecibles (Los que rompen las apuestas)')
+plt.xlabel('% de Acierto de la Casa de Apuestas (Menor = Más Impredecible)')
+plt.ylabel('Equipo')
+plt.grid(axis='x', linestyle='--', alpha=0.7)
+plt.show()
+
+print("Los 5 equipos más difíciles de predecir son:")
+print(impredecibles.head(5))
+
+#%% 
+
+partidos_locales = df[['equipo_local', 'torneo']].rename(columns={'equipo_local': 'equipo'})
+partidos_visitantes = df[['equipo_visitante', 'torneo']].rename(columns={'equipo_visitante': 'equipo'})
+
+todos_los_registros = pd.concat([partidos_locales, partidos_visitantes])
+
+torneos_por_equipo = todos_los_registros.groupby('equipo')['torneo'].nunique().reset_index()
+torneos_por_equipo.columns = ['equipo', 'cant_torneos']
+
+impredecibles_con_torneos = pd.merge(impredecibles, torneos_por_equipo, on='equipo')
+
+print(impredecibles_con_torneos.sort_values(by='acierto_apuesta').head(20))
+
+
+df['local_gana'] = (df['resultado'] == 'L').astype(int)
+
+bins = [0, 0.2, 0.4, 0.6, 0.8, 1]
+
+df['bin_prob_local'] = pd.cut(df['prob_local'], bins)
+
+calibracion = df.groupby('bin_prob_local').agg({
+    'local_gana': 'mean',
+    'prob_local': 'mean',
+    'resultado': 'count'
+}).reset_index()
+
+calibracion.columns = ['bin', 'frecuencia_real', 'prob_predicha', 'cantidad']
+
+plt.figure(figsize=(8, 6))
+
+plt.plot([0,1], [0,1], linestyle='--')
+
+sns.lineplot(data=calibracion, x='prob_predicha', y='frecuencia_real', marker='o')
+
+plt.title('Calibración de Probabilidades - Local')
+plt.xlabel('Probabilidad implícita (casa de apuestas)')
+plt.ylabel('Frecuencia real de victoria')
+plt.grid(True)
+
+plt.show()
