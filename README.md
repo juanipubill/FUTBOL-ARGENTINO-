@@ -2,7 +2,7 @@ PROYECTO DE ANÁLISIS DE DATOS
 
 Requisitos : 
 Para ejecutar este código es necesario tener instalado Python3 y las siguientes librerias: 
--Numpy
+-Duckdb
 -Pandas 
 -MatplotLib
 -Seaborn
