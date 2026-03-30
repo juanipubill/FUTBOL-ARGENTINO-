@@ -140,7 +140,6 @@ plt.ylabel('Equipo')
 plt.grid(axis='x', linestyle='--', alpha=0.7)
 plt.show()
 
-##GRAFICO DE LOS MENOS PREDESCIBLES
 acierto_por_equipo = todos_los_aciertos.groupby('equipo')['acierto_apuesta'].mean() * 100
 acierto_por_equipo = acierto_por_equipo.reset_index()
 
@@ -148,6 +147,8 @@ acierto_por_equipo = acierto_por_equipo.reset_index()
 predecibles = acierto_por_equipo.sort_values(by='acierto_apuesta', ascending=False)
 
 impredecibles = acierto_por_equipo.sort_values(by='acierto_apuesta', ascending=True)
+
+##GRAFICO DE LOS MENOS PREDESCIBLES
 
 plt.figure(figsize=(12, 8))
 sns.barplot(data=impredecibles.head(20), x='acierto_apuesta', y='equipo', palette='Reds_r')
